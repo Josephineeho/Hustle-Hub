@@ -125,7 +125,7 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {/* Status Messages */}
+          {/*  checking Status Messages . */}
         {successMsg && (
           <div className="mb-6 bg-emerald-50 border border-emerald-200 text-emerald-800 p-3.5 rounded-(--radius-md) text-body-sm text-center font-medium animate-in fade-in duration-200">
             {successMsg}
@@ -164,6 +164,7 @@ export default function LoginPage() {
               </span>
             )}
           </div>
+          {/*for password*/}
 
           {/* Password */}
           <div className="flex flex-col gap-1.5">
