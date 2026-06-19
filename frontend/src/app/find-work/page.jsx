@@ -22,17 +22,37 @@ export default function FindWorkPage() {
 
   useEffect(() => {
     async function load() {
+      // Get current session (may be null for guests)
+      const { data: { session } = {} } = await supabase.auth.getSession();
+
       const { data, error } = await supabase
         .from('jobs')
         .select('*')
         .eq('status', 'open')
         .order('created_at', { ascending: false });
-        
+
       if (!error && data) {
-        setJobs(data);
+        let visibleJobs = data;
+
+        // If a user is logged in, load their applications and filter out applied jobs
+        if (session?.user) {
+          const { data: apps } = await supabase
+            .from('applications')
+            .select('job_id')
+            .eq('provider_id', session.user.id);
+
+          const appliedJobIds = Array.isArray(apps) ? apps.map(a => a.job_id) : [];
+          if (appliedJobIds.length) {
+            visibleJobs = visibleJobs.filter(job => !appliedJobIds.includes(job.id));
+          }
+        }
+
+        setJobs(visibleJobs);
       }
+
       setLoading(false);
     }
+
     load();
   }, []);
 

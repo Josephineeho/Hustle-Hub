@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import {
   User, Lock, Bell, CreditCard,
   Save, Eye, EyeOff, CheckCircle2, AlertCircle,
@@ -123,6 +123,25 @@ export default function ClientSettingsPage() {
     init();
   }, []);
 
+  // Avatar upload state
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
+
+  // Keep a preview URL in sync with selected file or existing avatar_url
+  useEffect(() => {
+    let url;
+    if (avatarFile) {
+      url = URL.createObjectURL(avatarFile);
+      setAvatarPreview(url);
+    } else {
+      setAvatarPreview(profile.avatar_url || "");
+    }
+
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [avatarFile, profile.avatar_url]);
+
   function showToast(type, text) {
     setToast({ type, text });
     setTimeout(() => setToast(null), 4000);
@@ -131,10 +150,43 @@ export default function ClientSettingsPage() {
   async function saveProfile(e) {
     e.preventDefault();
     if (!currentUserId) return;
+    if (!isSupabaseConfigured) {
+      showToast("error", "Supabase not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.");
+      return;
+    }
+
     setProfileSaving(true);
-    const { error } = await supabase.from("profiles").update(profile).eq("id", currentUserId);
+    // If there's a new avatar picked, upload it first
+    let updatedAvatarUrl = profile.avatar_url;
+    if (avatarFile) {
+      try {
+        const fileExt = avatarFile.name.split('.').pop();
+        const filePath = `avatars/${currentUserId}/avatar.${fileExt}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('avatars')
+          .upload(filePath, avatarFile, { upsert: true });
+
+        if (uploadErr) throw uploadErr;
+
+        const { data: publicData } = supabase.storage.from('avatars').getPublicUrl(filePath);
+        updatedAvatarUrl = publicData.publicUrl;
+      } catch (uerr) {
+        console.error('Avatar upload error:', uerr);
+        setProfileSaving(false);
+        showToast('error', uerr.message || 'Failed to upload avatar.');
+        return;
+      }
+    }
+
+    const { data, error } = await supabase.from("profiles").update({ ...profile, avatar_url: updatedAvatarUrl }).eq("id", currentUserId);
     setProfileSaving(false);
-    error ? showToast("error", "Failed to save profile.") : showToast("success", "Profile updated.");
+    if (error) {
+      console.error("Save profile error:", error);
+      showToast("error", error.message || "Failed to save profile.");
+    } else {
+      showToast("success", "Profile updated.");
+    }
   }
 
   async function savePassword(e) {
@@ -151,18 +203,40 @@ export default function ClientSettingsPage() {
     e.preventDefault();
     if (!currentUserId) return;
     setNotifSaving(true);
+    if (!isSupabaseConfigured) {
+      setNotifSaving(false);
+      showToast("error", "Supabase not configured. Cannot save preferences.");
+      return;
+    }
+
     const { error } = await supabase.from("profiles").update({ notification_prefs: notifPrefs }).eq("id", currentUserId);
     setNotifSaving(false);
-    error ? showToast("error", "Failed to save.") : showToast("success", "Preferences saved.");
+    if (error) {
+      console.error("Save notifications error:", error);
+      showToast("error", error.message || "Failed to save.");
+    } else {
+      showToast("success", "Preferences saved.");
+    }
   }
 
   async function savePayment(e) {
     e.preventDefault();
     if (!currentUserId) return;
     setPaymentSaving(true);
-    const { error } = await supabase.from("profiles").update({ payment_prefs: paymentPrefs }).eq("id", currentUserId);
+    if (!isSupabaseConfigured) {
+      setPaymentSaving(false);
+      showToast("error", "Supabase not configured. Cannot save payment info.");
+      return;
+    }
+
+    const { data, error } = await supabase.from("profiles").update({ payment_prefs: paymentPrefs }).eq("id", currentUserId);
     setPaymentSaving(false);
-    error ? showToast("error", "Failed to save.") : showToast("success", "Payment info saved.");
+    if (error) {
+      console.error("Save payment error:", error);
+      showToast("error", error.message || "Failed to save.");
+    } else {
+      showToast("success", "Payment info saved.");
+    }
   }
 
   if (loading) {
@@ -224,8 +298,34 @@ export default function ClientSettingsPage() {
             <Field label="Location">
               <Input value={profile.location} onChange={(e) => setProfile((p) => ({ ...p, location: e.target.value }))} placeholder="Yaoundé, Cameroon" />
             </Field>
-            <Field label="Avatar URL">
-              <Input value={profile.avatar_url} onChange={(e) => setProfile((p) => ({ ...p, avatar_url: e.target.value }))} placeholder="https://..." />
+            <Field label="Avatar">
+              <div className="flex items-center gap-4">
+                <div className="w-20 h-20 bg-gray-100 rounded-full overflow-hidden flex items-center justify-center border">
+                  {avatarPreview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={avatarPreview} alt="avatar" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-sm text-(--color-on-surface-variant)">No image</span>
+                  )}
+                </div>
+
+                <div className="flex-1">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      setAvatarFile(f);
+                      if (!f) setAvatarPreview(profile.avatar_url || "");
+                    }}
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-(--color-on-surface-variant) mt-2">Upload an image instead of pasting a URL. JPG/PNG recommended.</p>
+                  {profile.avatar_url && !avatarFile && (
+                    <p className="text-xs text-(--color-on-surface-variant) mt-1">Current: <a href={profile.avatar_url} target="_blank" rel="noreferrer" className="underline">view</a></p>
+                  )}
+                </div>
+              </div>
             </Field>
           </div>
           <div className="flex justify-end">

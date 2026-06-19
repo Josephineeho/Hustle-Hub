@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import {
   User,
   Lock,
@@ -143,6 +143,10 @@ export default function ProviderSettingsPage() {
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
+  // Avatar upload state
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
+
   // ── Load profile & guarantor ──
   useEffect(() => {
     async function init() {
@@ -204,6 +208,18 @@ export default function ProviderSettingsPage() {
     init();
   }, []);
 
+  // keep preview in sync with selected file or current avatar_url
+  useEffect(() => {
+    let url;
+    if (avatarFile) {
+      url = URL.createObjectURL(avatarFile);
+      setAvatarPreview(url);
+    } else {
+      setAvatarPreview(profile.avatar_url || "");
+    }
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [avatarFile, profile.avatar_url]);
+
   // ── Shared toast helper ──
   function showToast(type, text) {
     setToast({ type, text });
@@ -214,19 +230,46 @@ export default function ProviderSettingsPage() {
   async function saveProfile(e) {
     e.preventDefault();
     if (!currentUserId) return;
+    if (!isSupabaseConfigured) {
+      showToast("error", "Supabase not configured. Cannot save profile.");
+      return;
+    }
+
     setProfileSaving(true);
+
+    // If a new avatar file is selected, upload it first
+    let updatedAvatarUrl = profile.avatar_url;
+    if (avatarFile) {
+      try {
+        const ext = avatarFile.name.split('.').pop();
+        const path = `avatars/${currentUserId}/avatar.${ext}`;
+        const { error: uploadErr } = await supabase.storage
+          .from('avatars')
+          .upload(path, avatarFile, { upsert: true });
+        if (uploadErr) throw uploadErr;
+        const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(path);
+        updatedAvatarUrl = urlData?.publicUrl ?? updatedAvatarUrl;
+      } catch (uerr) {
+        console.error('Avatar upload error:', uerr);
+        setProfileSaving(false);
+        showToast('error', uerr.message || 'Failed to upload avatar.');
+        return;
+      }
+    }
+
     const { error } = await supabase
       .from("profiles")
       .update({
         name:       profile.name,
         bio:        profile.bio,
-        avatar_url: profile.avatar_url,
+        avatar_url: updatedAvatarUrl,
         skills:     profile.skills.split(",").map((s) => s.trim()).filter(Boolean),
         location:   profile.location,
       })
       .eq("id", currentUserId);
+
     setProfileSaving(false);
-    error ? showToast("error", "Failed to save profile.") : showToast("success", "Profile updated successfully.");
+    error ? showToast("error", error.message || "Failed to save profile.") : showToast("success", "Profile updated successfully.");
   }
 
   // ── Save Password ──
@@ -292,7 +335,8 @@ export default function ProviderSettingsPage() {
       const { data: urlData } = supabase.storage.from("guarantor-docs").getPublicUrl(path);
       setGuarantor((prev) => ({ ...prev, id_document_url: urlData?.publicUrl ?? "" }));
     } else {
-      showToast("error", "Failed to upload document. Ensure the storage bucket exists.");
+      console.error("Upload error:", error);
+      showToast("error", error.message || "Failed to upload document. Ensure the storage bucket exists.");
     }
     setUploading(false);
   }
@@ -311,7 +355,8 @@ export default function ProviderSettingsPage() {
 
     setGuarantorSaving(false);
     if (error) {
-      showToast("error", "Failed to save guarantor information.");
+      console.error("Save guarantor error:", error);
+      showToast("error", error.message || "Failed to save guarantor information.");
     } else {
       setGuarantorStatus("pending");
       showToast("success", "Guarantor information submitted for review.");
@@ -389,12 +434,34 @@ export default function ProviderSettingsPage() {
               placeholder="Cleaning, Delivery, Gardening..."
             />
           </Field>
-          <Field label="Avatar URL" hint="Direct link to your profile photo.">
-            <Input
-              value={profile.avatar_url}
-              onChange={(e) => setProfile((p) => ({ ...p, avatar_url: e.target.value }))}
-              placeholder="https://..."
-            />
+          <Field label="Avatar" hint="Upload a profile photo (JPG/PNG).">
+            <div className="flex items-center gap-4">
+              <div className="w-20 h-20 bg-gray-100 rounded-full overflow-hidden flex items-center justify-center border">
+                {avatarPreview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={avatarPreview} alt="avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-sm text-(--color-on-surface-variant)">No image</span>
+                )}
+              </div>
+
+              <div className="flex-1">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null;
+                    setAvatarFile(f);
+                    if (!f) setAvatarPreview(profile.avatar_url || "");
+                  }}
+                  className="text-sm"
+                />
+                <p className="text-xs text-(--color-on-surface-variant) mt-2">Upload an image instead of pasting a URL.</p>
+                {profile.avatar_url && !avatarFile && (
+                  <p className="text-xs text-(--color-on-surface-variant) mt-1">Current: <a href={profile.avatar_url} target="_blank" rel="noreferrer" className="underline">view</a></p>
+                )}
+              </div>
+            </div>
           </Field>
           <div className="flex justify-end">
             <button

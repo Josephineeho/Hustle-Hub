@@ -43,27 +43,16 @@ export default function PayRateForm({
             
           if (txError) throw txError;
 
-          // 2. Fetch freelancer current profile ratings & update
-          const { data: profileData, error: profileErr } = await supabase
-            .from("profiles")
-            .select("rating, total_reviews")
-            .eq("id", freelancerId)
-            .single();
+          // 2. Submit review via secure RPC that validates the payment
+          //    and updates the provider's aggregated rating server-side.
+          const { error: rpcError } = await supabase.rpc("submit_review", {
+            p_job_id: jobId,
+            p_provider_id: freelancerId,
+            p_rating: rating,
+            p_review_text: review || null,
+          });
 
-          if (!profileErr && profileData) {
-            const currentReviews = profileData.total_reviews || 0;
-            const currentRating = Number(profileData.rating) || 0;
-            const newReviewsCount = currentReviews + 1;
-            const newRatingAvg = parseFloat(((currentRating * currentReviews + rating) / newReviewsCount).toFixed(2));
-
-            await supabase
-              .from("profiles")
-              .update({
-                rating: newRatingAvg,
-                total_reviews: newReviewsCount
-              })
-              .eq("id", freelancerId);
-          }
+          if (rpcError) throw rpcError;
         }
       } catch (err) {
         console.error("Payment & rating submission error:", err);
